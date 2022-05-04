@@ -3,20 +3,56 @@ extern crate ring;
 use std::collections::HashMap;
 
 use bendy::encoding::{AsString, Error, SingleItemEncoder, ToBencode};
-use ring::digest::SHA256_OUTPUT_LEN;
+use ring::digest::{Digest, SHA256, SHA256_OUTPUT_LEN};
 
 const META_VERSION: u8 = 2;
 // Arbitrary maximum depth for a path to protect against bad torrent files.
 const MAX_FILE_PATH_DEPTH: usize = 20;
 
-pub type Sha256Digest = [u8; SHA256_OUTPUT_LEN];
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SHA256Digest([u8; SHA256_OUTPUT_LEN]);
+
+impl SHA256Digest {
+    pub const LENGTH: usize = SHA256_OUTPUT_LEN;
+}
+
+impl std::convert::AsRef<[u8]> for SHA256Digest {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+impl std::convert::From<[u8; SHA256Digest::LENGTH]> for SHA256Digest {
+    fn from(a: [u8; SHA256Digest::LENGTH]) -> Self {
+        Self(a)
+    }
+}
+
+impl std::convert::Into<[u8; SHA256Digest::LENGTH]> for SHA256Digest {
+    fn into(self) -> [u8; SHA256Digest::LENGTH] {
+        self.0
+    }
+}
+
+impl std::convert::TryFrom<Digest> for SHA256Digest {
+    type Error = &'static str;
+    fn try_from(d: Digest) -> Result<Self, Self::Error> {
+        if d.algorithm() != &SHA256 {
+            return Err("Sha256Digest can only be created from a SHA256 Digest");
+        }
+
+        let mut ret = [0; Self::LENGTH];
+        ret.copy_from_slice(d.as_ref());
+        Ok(Self(ret))
+    }
+}
 
 // A Torrent metainfo file defined in bep_0052.
 #[derive(Clone, Debug)]
 pub struct Torrent {
     pub announce: String,
     pub info: Info,
-    pub piece_layers: HashMap<Sha256Digest, Vec<Sha256Digest>>,
+    pub piece_layers: HashMap<SHA256Digest, Vec<SHA256Digest>>,
 }
 
 impl ToBencode for Torrent {
@@ -36,9 +72,9 @@ impl ToBencode for Torrent {
                         if v.is_empty() {
                             continue;
                         }
-                        let mut buf = Vec::with_capacity(v.len() * Sha256Digest::default().len());
-                        v.iter().for_each(|s| buf.extend_from_slice(s.as_slice()));
-                        e.emit_pair(k, AsString(&buf))?;
+                        let mut buf = Vec::with_capacity(v.len() * SHA256Digest::LENGTH);
+                        v.iter().for_each(|s| buf.extend_from_slice(s.as_ref()));
+                        e.emit_pair(k.as_ref(), AsString(&buf))?;
                     }
                     Ok(())
                 })
@@ -103,10 +139,10 @@ impl ToBencode for Directory {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct File {
     pub length: u64,
-    pub pieces_root: Sha256Digest,
+    pub pieces_root: SHA256Digest,
 }
 
 impl ToBencode for File {
@@ -120,7 +156,7 @@ impl ToBencode for File {
                 e.emit_dict(|mut e| {
                     e.emit_pair(b"length", self.length)?;
                     if self.length != 0 {
-                        e.emit_pair(b"pieces root", AsString(self.pieces_root.as_slice()))?;
+                        e.emit_pair(b"pieces root", AsString(self.pieces_root.as_ref()))?;
                     }
                     Ok(())
                 })
@@ -187,7 +223,7 @@ mod tests {
     fn file_encode() {
         let f = File {
             length: 1024,
-            pieces_root: ['a' as u8; 32],
+            pieces_root: ['a' as u8; 32].into(),
         };
 
         assert_eq!(
@@ -200,7 +236,7 @@ mod tests {
     fn file_encode_zerolen() {
         let f = File {
             length: 0,
-            pieces_root: ['a' as u8; 32],
+            pieces_root: ['a' as u8; 32].into(),
         };
 
         assert_eq!(to_bencode_str(f), "d0:d6:lengthi0eee",);
@@ -222,7 +258,7 @@ mod tests {
 
         let f = File {
             length: 0,
-            pieces_root: ['a' as u8; 32],
+            pieces_root: ['a' as u8; 32].into(),
         };
 
         let mut p = PathElement::File(f);
@@ -263,14 +299,14 @@ mod tests {
                     "file1".to_owned(),
                     PathElement::File(File {
                         length: 1024,
-                        pieces_root: ['a' as u8; 32],
+                        pieces_root: ['a' as u8; 32].into(),
                     }),
                 ),
                 (
                     "file2".to_owned(),
                     PathElement::File(File {
                         length: 0,
-                        pieces_root: ['b' as u8; 32],
+                        pieces_root: ['b' as u8; 32].into(),
                     }),
                 ),
                 (
@@ -280,7 +316,7 @@ mod tests {
                             "file3".to_owned(),
                             PathElement::File(File {
                                 length: 0,
-                                pieces_root: ['b' as u8; 32],
+                                pieces_root: ['b' as u8; 32].into(),
                             }),
                         )]),
                     }),
@@ -306,14 +342,14 @@ mod tests {
                         "file1".to_owned(),
                         PathElement::File(File {
                             length: 1024,
-                            pieces_root: ['a' as u8; 32],
+                            pieces_root: ['a' as u8; 32].into(),
                         }),
                     )]),
                 },
             },
             piece_layers: HashMap::from([(
-                ['a' as u8; 32],
-                vec![['b' as u8; 32], ['c' as u8; 32]],
+                ['a' as u8; 32].into(),
+                vec![['b' as u8; 32].into(), ['c' as u8; 32].into()],
             )]),
         };
 
