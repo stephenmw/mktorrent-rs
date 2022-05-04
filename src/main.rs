@@ -1,3 +1,4 @@
+mod checksum;
 mod metainfo;
 
 fn main() {
