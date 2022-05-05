@@ -109,6 +109,18 @@ pub enum PathElement {
     File(File),
 }
 
+impl From<Directory> for PathElement {
+    fn from(d: Directory) -> Self {
+        Self::Directory(d)
+    }
+}
+
+impl From<File> for PathElement {
+    fn from(f: File) -> Self {
+        Self::File(f)
+    }
+}
+
 impl ToBencode for PathElement {
     const MAX_DEPTH: usize = Directory::MAX_DEPTH;
 
@@ -139,7 +151,7 @@ impl ToBencode for Directory {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct File {
     pub length: u64,
     pub pieces_root: SHA256Digest,
@@ -175,6 +187,7 @@ pub struct PieceLength {
 impl PieceLength {
     // Takes a number of bytes and returns a piece length. Return None if an
     // invalid n is used. n must be a power of two greater than 16KiB (2^14).
+    #[allow(dead_code)]
     pub fn from_bytes(n: u64) -> Option<Self> {
         let layers = log2(n).filter(|&n| n >= 14).map(|n| n - 14)?;
         Some(PieceLength { layers: layers })

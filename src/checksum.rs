@@ -9,7 +9,7 @@ use std::mem;
 const BLOCK_SIZE: usize = 16 << 10; // 16MiB
 
 // Returns the root, length and pieces_layer of a file.
-fn checksum_file<T: Read>(
+pub fn checksum_file<T: Read>(
     piece_length: metainfo::PieceLength,
     mut r: T,
 ) -> io::Result<(metainfo::File, Vec<SHA256Digest>)> {
