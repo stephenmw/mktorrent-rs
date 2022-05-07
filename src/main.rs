@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+use anyhow::{Context, Result};
 use bendy::encoding::ToBencode;
 use clap::Parser;
 use metainfo::{Directory, Info, PieceLength, Torrent};
@@ -24,24 +25,32 @@ struct Cli {
     piece_length: u8,
 
     #[clap(parse(from_os_str))]
-    file: PathBuf,
+    root: PathBuf,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let f = fs::File::open(&cli.file).expect("failed to open file");
+    let root = cli.root;
+
     let piece_length = PieceLength {
         layers: cli.piece_length,
     };
-    let (f, pieces_layer) = checksum::checksum_file(piece_length, f).expect("failed to read file");
 
-    let filename = cli.file.to_string_lossy().into_owned();
+    let torrent_name =
+        torrent_name_from_path(&root).context("could not convert root filename to UTF-8")?;
+
+    let (f, pieces_layer) = {
+        let f = fs::File::open(&root).context("failed to open file")?;
+        checksum::checksum_file(piece_length, f).context("failed to read file")?
+    };
+
+    let filename = torrent_name.clone();
 
     let torrent = Torrent {
         announce: cli.announce,
         info: Info {
-            name: filename.clone(),
+            name: torrent_name,
             piece_length: piece_length,
             file_tree: Directory {
                 entries: HashMap::from([(filename, f.into())]),
@@ -52,4 +61,11 @@ fn main() {
 
     let encoded = torrent.to_bencode().unwrap();
     io::stdout().write_all(&encoded).unwrap();
+
+    Ok(())
+}
+
+// Build the torrent name from the root directory or file.
+fn torrent_name_from_path(p: &PathBuf) -> Option<String> {
+    Some(p.file_name()?.to_str()?.to_owned())
 }
