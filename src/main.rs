@@ -23,8 +23,8 @@ struct Cli {
     #[clap(long)]
     announce: String,
 
-    /// n where n is 16KiB * 2^n
-    #[clap(long)]
+    /// The exponent of the piece_length. Must be between 14 and 40.
+    #[clap(long, value_name = "EXPONENT")]
     piece_length: u8,
 
     #[clap(parse(from_os_str))]
@@ -36,8 +36,14 @@ fn main() -> Result<()> {
 
     let root = cli.root;
 
-    let piece_length = PieceLength {
-        layers: cli.piece_length,
+    let piece_length = {
+        if cli.piece_length < 14 || cli.piece_length > 40 {
+            return Err(Error::msg("--piece-length must be between 14 and 40"));
+        }
+
+        PieceLength {
+            layers: cli.piece_length - 14,
+        }
     };
 
     let torrent_name =
