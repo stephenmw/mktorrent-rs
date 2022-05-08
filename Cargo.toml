@@ -9,5 +9,6 @@ edition = "2021"
 anyhow = "1.0"
 bendy = "0.3.3"
 clap = { version = "3.1.15", features = ["derive"] }
+indicatif = "0.16"
 ring = "0.16.20"
 walkdir = "2.3"
