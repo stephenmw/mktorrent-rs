@@ -1,13 +1,13 @@
 extern crate ring;
 
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 
 use bendy::encoding::{AsString, Error, SingleItemEncoder, ToBencode};
 use ring::digest::{Digest, SHA256, SHA256_OUTPUT_LEN};
 
 const META_VERSION: u8 = 2;
 // Arbitrary maximum depth for a path to protect against bad torrent files.
-const MAX_FILE_PATH_DEPTH: usize = 20;
+pub const MAX_FILE_PATH_DEPTH: usize = 20;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SHA256Digest([u8; SHA256_OUTPUT_LEN]);
@@ -53,6 +53,60 @@ pub struct Torrent {
     pub announce: String,
     pub info: Info,
     pub piece_layers: HashMap<SHA256Digest, Vec<SHA256Digest>>,
+}
+
+impl Torrent {
+    pub fn new(announce: String, name: String, piece_length: PieceLength) -> Self {
+        Torrent {
+            announce: announce,
+            info: Info {
+                name: name,
+                piece_length: piece_length,
+                file_tree: Directory::default(),
+            },
+            piece_layers: HashMap::new(),
+        }
+    }
+
+    // Adds a file to the torrent. If the file already exists or the path is
+    // invalid, no action is taken and false is returned.
+    pub fn add_file(&mut self, path: &str, f: File, pieces_layer: Vec<SHA256Digest>) -> bool {
+        let mut components = path.split('/');
+        let first_component = match components.next() {
+            Some(x) => x,
+            // the path has no components.
+            None => return false,
+        };
+        let mut cur_dir = self
+            .info
+            .file_tree
+            .entries
+            .entry(first_component.to_owned());
+
+        for c in components {
+            cur_dir = match cur_dir
+                .or_insert(Directory::default().into())
+                .get_entry(c.to_owned())
+            {
+                Some(x) => x,
+                // the path contains a component that is already a file
+                None => return false,
+            };
+        }
+
+        match cur_dir {
+            // The file was added before
+            Entry::Occupied(_) => return false,
+            Entry::Vacant(v) => v.insert(f.into()),
+        };
+
+        // TODO: check for piece layer already existing.
+        if pieces_layer.len() != 0 {
+            self.piece_layers.insert(f.pieces_root, pieces_layer);
+        }
+
+        true
+    }
 }
 
 impl ToBencode for Torrent {
@@ -109,6 +163,16 @@ pub enum PathElement {
     File(File),
 }
 
+impl PathElement {
+    // Returns an Entry if the PathElement is a Direcory, otherwise None.
+    fn get_entry(&mut self, name: String) -> Option<Entry<'_, String, PathElement>> {
+        match self {
+            Self::Directory(ref mut d) => Some(d.get_entry(name)),
+            _ => None,
+        }
+    }
+}
+
 impl From<Directory> for PathElement {
     fn from(d: Directory) -> Self {
         Self::Directory(d)
@@ -132,9 +196,15 @@ impl ToBencode for PathElement {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Directory {
     pub entries: HashMap<String, PathElement>,
+}
+
+impl Directory {
+    fn get_entry(&mut self, name: String) -> Entry<'_, String, PathElement> {
+        self.entries.entry(name)
+    }
 }
 
 impl ToBencode for Directory {
@@ -386,6 +456,51 @@ mod tests {
         assert_eq!(
             PieceLength::from_bytes(1 << 14),
             Some(PieceLength { layers: 0 })
+        );
+    }
+
+    #[test]
+    fn torrent_add_file() {
+        let mut torrent = Torrent::new("".to_string(), "".to_string(), PieceLength { layers: 0 });
+        assert_eq!(true, torrent.add_file("a.txt", File::default(), Vec::new()));
+        assert_eq!(torrent.piece_layers.len(), 0); // empty pieces_layer results in it not being added
+
+        // adding the same file results in a conflict
+        assert_eq!(
+            false,
+            torrent.add_file("a.txt", File::default(), Vec::new())
+        );
+
+        // adding a different file does not
+        assert_eq!(true, torrent.add_file("b.txt", File::default(), Vec::new()));
+
+        // directories work
+        assert_eq!(
+            true,
+            torrent.add_file("c/d.txt", File::default(), Vec::new())
+        );
+
+        // cannot use an existing file as a directory
+        assert_eq!(
+            false,
+            torrent.add_file("c/d.txt/e", File::default(), Vec::new())
+        );
+
+        // non-empty pieces_layer is added to pieces_layers
+        assert_eq!(
+            true,
+            torrent.add_file(
+                "c/f.txt",
+                File {
+                    pieces_root: ['a' as u8; 32].into(),
+                    length: 1
+                },
+                vec![SHA256Digest::default(), SHA256Digest::default()]
+            )
+        );
+        assert_eq!(
+            torrent.piece_layers.get(&['a' as u8; 32].into()).unwrap(),
+            &vec![SHA256Digest::default(), SHA256Digest::default()]
         );
     }
 }

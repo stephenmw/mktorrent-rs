@@ -1,15 +1,15 @@
 mod checksum;
 mod metainfo;
 
-use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Error, Result};
 use bendy::encoding::ToBencode;
 use clap::Parser;
-use metainfo::{Directory, Info, PieceLength, Torrent};
+use metainfo::{PieceLength, Torrent, MAX_FILE_PATH_DEPTH};
+use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[clap(name = "mktorrent-rs")]
@@ -40,24 +40,21 @@ fn main() -> Result<()> {
     let torrent_name =
         torrent_name_from_path(&root).context("could not convert root filename to UTF-8")?;
 
-    let (f, pieces_layer) = {
-        let f = fs::File::open(&root).context("failed to open file")?;
-        checksum::checksum_file(piece_length, f).context("failed to read file")?
-    };
+    let mut torrent = Torrent::new(cli.announce, torrent_name.clone(), piece_length);
 
-    let filename = torrent_name.clone();
+    let metadata =
+        fs::metadata(&root).context(format!("failed to stat `{}`", root.to_string_lossy()))?;
 
-    let torrent = Torrent {
-        announce: cli.announce,
-        info: Info {
-            name: torrent_name,
-            piece_length: piece_length,
-            file_tree: Directory {
-                entries: HashMap::from([(filename, f.into())]),
-            },
-        },
-        piece_layers: HashMap::from([(f.pieces_root, pieces_layer)]),
-    };
+    if metadata.is_file() {
+        let filename = &torrent_name;
+        let dir = root.parent().unwrap_or(Path::new(""));
+        add_file(&mut torrent, dir, piece_length, filename)?;
+    } else {
+        let files = get_file_list(&root)?;
+        for file in files {
+            add_file(&mut torrent, &root, piece_length, &file)?;
+        }
+    }
 
     let encoded = torrent.to_bencode().unwrap();
     io::stdout().write_all(&encoded).unwrap();
@@ -65,7 +62,61 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn add_file(
+    torrent: &mut Torrent,
+    root: &Path,
+    piece_length: PieceLength,
+    path: &str,
+) -> Result<()> {
+    let (f, pieces_layer) = {
+        let f = fs::File::open(root.join(path)).context("failed to open file")?;
+        checksum::checksum_file(piece_length, f).context("failed to read file")?
+    };
+
+    if !torrent.add_file(&path, f, pieces_layer) {
+        return Err(Error::msg("conflicting file"));
+    }
+
+    Ok(())
+}
+
+// Returns the relative path from the root for each file in the root.
+fn get_file_list(root: &Path) -> Result<Vec<String>> {
+    let mut ret = Vec::new();
+
+    for entry in WalkDir::new(root) {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        if entry.depth() >= MAX_FILE_PATH_DEPTH {
+            return Err(Error::msg(format!(
+                "hit max file depth ({}) at file: {}",
+                MAX_FILE_PATH_DEPTH,
+                entry.path().to_string_lossy(),
+            )));
+        }
+
+        let rel_path = entry.path().strip_prefix(root).unwrap();
+
+        let rel_path_str = rel_path
+            .to_str()
+            .ok_or_else(|| {
+                Error::msg(format!(
+                    "cannot convert path to UTF-8: {}",
+                    rel_path.to_string_lossy(),
+                ))
+            })?
+            .to_owned();
+
+        ret.push(rel_path_str);
+    }
+
+    Ok(ret)
+}
+
 // Build the torrent name from the root directory or file.
-fn torrent_name_from_path(p: &PathBuf) -> Option<String> {
+fn torrent_name_from_path(p: &Path) -> Option<String> {
     Some(p.file_name()?.to_str()?.to_owned())
 }
