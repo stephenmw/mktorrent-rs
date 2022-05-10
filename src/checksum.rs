@@ -1,5 +1,6 @@
 extern crate ring;
 
+pub mod merkle;
 pub mod sha256;
 
 use crate::metainfo;
@@ -31,7 +32,7 @@ pub struct FileV2Hasher {
     // Number of bytes written in the current block.
     block_cur: usize,
 
-    piece_merkle: MerkleHasher,
+    piece_merkle: merkle::Hasher,
     pieces_layer: Vec<sha256::Digest>,
 }
 
@@ -42,7 +43,7 @@ impl FileV2Hasher {
             ctx: sha256::Hasher::default(),
             length: 0,
             block_cur: 0,
-            piece_merkle: MerkleHasher::new(),
+            piece_merkle: merkle::Hasher::new(),
             pieces_layer: Vec::new(),
         }
     }
@@ -95,10 +96,7 @@ impl FileV2Hasher {
             self.pieces_layer.push(d);
         }
 
-        // calculate file root
-        let mut hasher = MerkleHasher::new();
-        self.pieces_layer.iter().for_each(|&d| hasher.add_block(d));
-        let root = hasher.finish();
+        let root = merkle::root_hash(self.pieces_layer.iter().copied());
 
         // A pieces_layer with only one value contains the pieces_root. We can
         // ignore it.
@@ -141,85 +139,6 @@ impl Write for FileV2Hasher {
     fn flush(&mut self) -> io::Result<()> {
         // no-op
         Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct MerkleHasher {
-    stack: Vec<MerkleHasherEntry>,
-}
-
-impl MerkleHasher {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    // Adds an entry to the bottom layer of the merkle tree.
-    fn add_block(&mut self, hash: sha256::Digest) {
-        self.stack.push(MerkleHasherEntry::new(hash));
-        while self.stack.len() >= 2
-            && self.stack[self.stack.len() - 1].layer == self.stack[self.stack.len() - 2].layer
-        {
-            let b = self.stack.pop().unwrap();
-            let a = self.stack.pop().unwrap();
-
-            let d = MerkleHasher::combine_digests(a.digest, b.digest);
-            self.stack.push(MerkleHasherEntry {
-                layer: a.layer + 1,
-                digest: d,
-            });
-        }
-    }
-
-    // Computes SHA256(a + b).
-    fn combine_digests(a: sha256::Digest, b: sha256::Digest) -> sha256::Digest {
-        let mut h = sha256::Hasher::default();
-        h.update(a.as_ref());
-        h.update(b.as_ref());
-        h.into_digest()
-    }
-
-    // Returns the current layer if that layer is complete, otherwise None.
-    fn current_layer(&self) -> Option<u8> {
-        if self.stack.len() == 1 {
-            Some(self.stack[0].layer)
-        } else {
-            None
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.stack.is_empty()
-    }
-
-    // Completes the merkle tree using zeroed out digests. Returns the root of
-    // the tree. If the MerkleHasher started with no blocks, the output is
-    // undefined. The hasher is reset after returning the digest.
-    fn finish(&mut self) -> sha256::Digest {
-        while self.stack.len() != 1 {
-            self.add_block(sha256::Digest::default());
-        }
-
-        let ret = self.stack[0].digest;
-        self.reset();
-        ret
-    }
-
-    // Reset the hasher so it can be reused.
-    fn reset(&mut self) {
-        self.stack.truncate(0);
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct MerkleHasherEntry {
-    layer: u8,
-    digest: sha256::Digest,
-}
-
-impl MerkleHasherEntry {
-    fn new(digest: sha256::Digest) -> Self {
-        Self { layer: 0, digest }
     }
 }
 
