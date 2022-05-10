@@ -2,57 +2,20 @@ extern crate ring;
 
 use std::collections::{hash_map::Entry, HashMap};
 
+use crate::checksum::sha256;
+
 use bendy::encoding::{AsString, Error, SingleItemEncoder, ToBencode};
-use ring::digest::{Digest, SHA256, SHA256_OUTPUT_LEN};
 
 const META_VERSION: u8 = 2;
 // Arbitrary maximum depth for a path to protect against bad torrent files.
 pub const MAX_FILE_PATH_DEPTH: usize = 20;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SHA256Digest([u8; SHA256_OUTPUT_LEN]);
-
-impl SHA256Digest {
-    pub const LENGTH: usize = SHA256_OUTPUT_LEN;
-}
-
-impl std::convert::AsRef<[u8]> for SHA256Digest {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
-    }
-}
-
-impl std::convert::From<[u8; SHA256Digest::LENGTH]> for SHA256Digest {
-    fn from(a: [u8; SHA256Digest::LENGTH]) -> Self {
-        Self(a)
-    }
-}
-
-impl std::convert::Into<[u8; SHA256Digest::LENGTH]> for SHA256Digest {
-    fn into(self) -> [u8; SHA256Digest::LENGTH] {
-        self.0
-    }
-}
-
-impl std::convert::TryFrom<Digest> for SHA256Digest {
-    type Error = &'static str;
-    fn try_from(d: Digest) -> Result<Self, Self::Error> {
-        if d.algorithm() != &SHA256 {
-            return Err("Sha256Digest can only be created from a SHA256 Digest");
-        }
-
-        let mut ret = [0; Self::LENGTH];
-        ret.copy_from_slice(d.as_ref());
-        Ok(Self(ret))
-    }
-}
 
 // A Torrent metainfo file defined in bep_0052.
 #[derive(Clone, Debug)]
 pub struct Torrent {
     pub announce: String,
     pub info: Info,
-    pub piece_layers: HashMap<SHA256Digest, Vec<SHA256Digest>>,
+    pub piece_layers: HashMap<sha256::Digest, Vec<sha256::Digest>>,
 }
 
 impl Torrent {
@@ -70,7 +33,7 @@ impl Torrent {
 
     // Adds a file to the torrent. If the file already exists or the path is
     // invalid, no action is taken and false is returned.
-    pub fn add_file(&mut self, path: &str, f: File, pieces_layer: Vec<SHA256Digest>) -> bool {
+    pub fn add_file(&mut self, path: &str, f: File, pieces_layer: Vec<sha256::Digest>) -> bool {
         let mut components = path.split('/');
         let first_component = match components.next() {
             Some(x) => x,
@@ -126,7 +89,7 @@ impl ToBencode for Torrent {
                         if v.is_empty() {
                             continue;
                         }
-                        let mut buf = Vec::with_capacity(v.len() * SHA256Digest::LENGTH);
+                        let mut buf = Vec::with_capacity(v.len() * sha256::Digest::LENGTH);
                         v.iter().for_each(|s| buf.extend_from_slice(s.as_ref()));
                         e.emit_pair(k.as_ref(), AsString(&buf))?;
                     }
@@ -224,7 +187,7 @@ impl ToBencode for Directory {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct File {
     pub length: u64,
-    pub pieces_root: SHA256Digest,
+    pub pieces_root: sha256::Digest,
 }
 
 impl ToBencode for File {
@@ -495,12 +458,12 @@ mod tests {
                     pieces_root: ['a' as u8; 32].into(),
                     length: 1
                 },
-                vec![SHA256Digest::default(), SHA256Digest::default()]
+                vec![sha256::Digest::default(), sha256::Digest::default()]
             )
         );
         assert_eq!(
             torrent.piece_layers.get(&['a' as u8; 32].into()).unwrap(),
-            &vec![SHA256Digest::default(), SHA256Digest::default()]
+            &vec![sha256::Digest::default(), sha256::Digest::default()]
         );
     }
 }

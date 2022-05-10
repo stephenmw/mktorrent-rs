@@ -1,6 +1,8 @@
 extern crate ring;
 
-use crate::metainfo::{self, SHA256Digest};
+pub mod sha256;
+
+use crate::metainfo;
 use ring::digest;
 use std::cmp;
 use std::io::{self, Read, Write};
@@ -12,7 +14,7 @@ const BLOCK_SIZE: usize = 16 << 10; // 16MiB
 pub fn checksum_file<T: Read>(
     piece_length: metainfo::PieceLength,
     mut r: T,
-) -> io::Result<(metainfo::File, Vec<SHA256Digest>)> {
+) -> io::Result<(metainfo::File, Vec<sha256::Digest>)> {
     let mut hasher = FileV2Hasher::new(piece_length);
     io::copy(&mut r, &mut hasher)?;
     Ok(hasher.finish())
@@ -31,7 +33,7 @@ pub struct FileV2Hasher {
     block_cur: usize,
 
     piece_merkle: MerkleHasher,
-    pieces_layer: Vec<SHA256Digest>,
+    pieces_layer: Vec<sha256::Digest>,
 }
 
 impl FileV2Hasher {
@@ -47,7 +49,7 @@ impl FileV2Hasher {
     }
 
     pub fn update(&mut self, data: &[u8]) {
-        fn update_block(t: &mut FileV2Hasher, data: &[u8]) -> (usize, Option<SHA256Digest>) {
+        fn update_block(t: &mut FileV2Hasher, data: &[u8]) -> (usize, Option<sha256::Digest>) {
             let needed = BLOCK_SIZE - t.block_cur;
             let n = cmp::min(needed as usize, data.len());
             t.ctx.update(&data[..n]);
@@ -77,7 +79,7 @@ impl FileV2Hasher {
         }
     }
 
-    fn finish_block(&mut self) -> SHA256Digest {
+    fn finish_block(&mut self) -> sha256::Digest {
         self.block_cur = 0;
 
         let ctx = mem::replace(&mut self.ctx, new_sha256_ctx());
@@ -87,7 +89,7 @@ impl FileV2Hasher {
     }
 
     // Returns the File and pieces_layer. This resets the hasher.
-    pub fn finish(&mut self) -> (metainfo::File, Vec<SHA256Digest>) {
+    pub fn finish(&mut self) -> (metainfo::File, Vec<sha256::Digest>) {
         if self.block_cur > 0 {
             let d = self.finish_block();
             self.piece_merkle.add_block(d);
@@ -116,7 +118,7 @@ impl FileV2Hasher {
             pieces_root: if self.length > 0 {
                 root
             } else {
-                SHA256Digest::default()
+                sha256::Digest::default()
             },
         };
 
@@ -158,7 +160,7 @@ impl MerkleHasher {
     }
 
     // Adds an entry to the bottom layer of the merkle tree.
-    fn add_block(&mut self, hash: SHA256Digest) {
+    fn add_block(&mut self, hash: sha256::Digest) {
         self.stack.push(MerkleHasherEntry::new(hash));
         while self.stack.len() >= 2
             && self.stack[self.stack.len() - 1].layer == self.stack[self.stack.len() - 2].layer
@@ -175,7 +177,7 @@ impl MerkleHasher {
     }
 
     // Computes SHA256(a + b).
-    fn combine_digests(a: SHA256Digest, b: SHA256Digest) -> SHA256Digest {
+    fn combine_digests(a: sha256::Digest, b: sha256::Digest) -> sha256::Digest {
         let mut ctx = new_sha256_ctx();
         ctx.update(a.as_ref());
         ctx.update(b.as_ref());
@@ -200,9 +202,9 @@ impl MerkleHasher {
     // Completes the merkle tree using zeroed out digests. Returns the root of
     // the tree. If the MerkleHasher started with no blocks, the output is
     // undefined. The hasher is reset after returning the digest.
-    fn finish(&mut self) -> SHA256Digest {
+    fn finish(&mut self) -> sha256::Digest {
         while self.stack.len() != 1 {
-            self.add_block(SHA256Digest::default());
+            self.add_block(sha256::Digest::default());
         }
 
         let ret = self.stack[0].digest;
@@ -219,11 +221,11 @@ impl MerkleHasher {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct MerkleHasherEntry {
     layer: u8,
-    digest: SHA256Digest,
+    digest: sha256::Digest,
 }
 
 impl MerkleHasherEntry {
-    fn new(digest: SHA256Digest) -> Self {
+    fn new(digest: sha256::Digest) -> Self {
         Self { layer: 0, digest }
     }
 }
