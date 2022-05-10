@@ -3,7 +3,6 @@ extern crate ring;
 pub mod sha256;
 
 use crate::metainfo;
-use ring::digest;
 use std::cmp;
 use std::io::{self, Read, Write};
 use std::mem;
@@ -28,7 +27,7 @@ pub struct FileV2Hasher {
     length: u64,
 
     // Hasher for the current block. Must be a sha256 context.
-    ctx: digest::Context,
+    ctx: sha256::Hasher,
     // Number of bytes written in the current block.
     block_cur: usize,
 
@@ -40,7 +39,7 @@ impl FileV2Hasher {
     pub fn new(piece_length: metainfo::PieceLength) -> Self {
         Self {
             piece_length: piece_length,
-            ctx: new_sha256_ctx(),
+            ctx: sha256::Hasher::default(),
             length: 0,
             block_cur: 0,
             piece_merkle: MerkleHasher::new(),
@@ -81,11 +80,7 @@ impl FileV2Hasher {
 
     fn finish_block(&mut self) -> sha256::Digest {
         self.block_cur = 0;
-
-        let ctx = mem::replace(&mut self.ctx, new_sha256_ctx());
-        let digest = ctx.finish();
-
-        digest.try_into().expect("must be sha256 context")
+        self.ctx.finish()
     }
 
     // Returns the File and pieces_layer. This resets the hasher.
@@ -129,7 +124,7 @@ impl FileV2Hasher {
 
     // Resets the hasher so it can be reused.
     pub fn reset(&mut self) {
-        self.ctx = new_sha256_ctx();
+        self.ctx = sha256::Hasher::default();
         self.length = 0;
         self.block_cur = 0;
         self.piece_merkle.reset();
@@ -178,12 +173,10 @@ impl MerkleHasher {
 
     // Computes SHA256(a + b).
     fn combine_digests(a: sha256::Digest, b: sha256::Digest) -> sha256::Digest {
-        let mut ctx = new_sha256_ctx();
-        ctx.update(a.as_ref());
-        ctx.update(b.as_ref());
-        let digest = ctx.finish();
-
-        digest.try_into().expect("must be sha256 context")
+        let mut h = sha256::Hasher::default();
+        h.update(a.as_ref());
+        h.update(b.as_ref());
+        h.into_digest()
     }
 
     // Returns the current layer if that layer is complete, otherwise None.
@@ -228,11 +221,6 @@ impl MerkleHasherEntry {
     fn new(digest: sha256::Digest) -> Self {
         Self { layer: 0, digest }
     }
-}
-
-// Returns a new SHA256 context
-fn new_sha256_ctx() -> digest::Context {
-    digest::Context::new(&digest::SHA256)
 }
 
 #[cfg(test)]
