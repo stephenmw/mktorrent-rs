@@ -1,14 +1,17 @@
 use crate::checksum::sha256;
 
-// Calculate the root hash of a merkle tree given the leaf hashes. Missing leaf
-// hashes are replaced with zeros.
-pub fn root_hash(digests: impl IntoIterator<Item = sha256::Digest>) -> sha256::Digest {
+// Calculate the root hash of a merkle tree given a layer of the merkle tree.
+// Missing hashes are assumed to be zeros at layer zero.
+pub fn root_hash<'a>(
+    layer: u8,
+    digests: impl IntoIterator<Item = &'a sha256::Digest>,
+) -> sha256::Digest {
     let mut hasher = Hasher::new();
     for d in digests {
         hasher.add_block(d);
     }
 
-    hasher.finish()
+    hasher.finish_tree(&zero_root(layer))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -22,15 +25,15 @@ impl Hasher {
     }
 
     // Adds an entry to the bottom layer of the merkle tree.
-    pub fn add_block(&mut self, hash: sha256::Digest) {
-        self.stack.push(Entry::new(hash));
+    pub fn add_block(&mut self, hash: &sha256::Digest) {
+        self.stack.push(Entry::new(*hash));
         while self.stack.len() >= 2
             && self.stack[self.stack.len() - 1].layer == self.stack[self.stack.len() - 2].layer
         {
             let b = self.stack.pop().unwrap();
             let a = self.stack.pop().unwrap();
 
-            let d = Hasher::combine_digests(a.digest, b.digest);
+            let d = Hasher::combine_digests(&a.digest, &b.digest);
             self.stack.push(Entry {
                 layer: a.layer + 1,
                 digest: d,
@@ -39,7 +42,7 @@ impl Hasher {
     }
 
     // Computes SHA256(a + b).
-    fn combine_digests(a: sha256::Digest, b: sha256::Digest) -> sha256::Digest {
+    fn combine_digests(a: &sha256::Digest, b: &sha256::Digest) -> sha256::Digest {
         let mut h = sha256::Hasher::default();
         h.update(a.as_ref());
         h.update(b.as_ref());
@@ -59,18 +62,37 @@ impl Hasher {
         self.stack.is_empty()
     }
 
-    // Completes the merkle tree using zeroed out digests. Returns the root of
-    // the tree. If the MerkleHasher is finished with no blocks added, the
-    // output is a zeroed digest. The hasher is reset after returning the
-    // digest.
-    pub fn finish(&mut self) -> sha256::Digest {
+    // Adds the pad to the merkle tree until there is a single root. This
+    // resets the hasher.
+    pub fn finish_tree(&mut self, pad: &sha256::Digest) -> sha256::Digest {
         while self.stack.len() != 1 {
-            self.add_block(sha256::Digest::default());
+            self.add_block(pad);
         }
 
         let ret = self.stack[0].digest;
         self.reset();
         ret
+    }
+
+    // Adds the pad to the merkle tree until the root is at the given layer. If
+    // the next root is greater than the given layer, None is returned. In
+    // either case the hasher is reset.s
+    pub fn finish_layer(&mut self, pad: &sha256::Digest, layer: u8) -> Option<sha256::Digest> {
+        if let Some(e) = self.stack.first() {
+            // If we have too many blocks, we can't pad to reach tht layer.
+            if e.layer > layer || (e.layer == layer && self.stack.len() > 1) {
+                self.reset();
+                return None;
+            }
+        }
+
+        while self.current_layer().map(|l| l < layer).unwrap_or(true) {
+            self.add_block(pad);
+        }
+
+        let ret = self.stack[0].digest;
+        self.reset();
+        Some(ret)
     }
 
     // Reset the hasher so it can be reused.
@@ -91,6 +113,16 @@ impl Entry {
     }
 }
 
+// Calculates the merkle root of a tree with the given layer assuming all input
+// blocks are zeroed digests.
+pub fn zero_root(layer: u8) -> sha256::Digest {
+    let mut d = sha256::Digest::default();
+    for _ in 0..layer {
+        d = Hasher::combine_digests(&d, &d);
+    }
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,23 +133,23 @@ mod tests {
         let a = ['a' as u8; sha256::Digest::LENGTH].try_into().unwrap();
         let b = ['b' as u8; sha256::Digest::LENGTH].try_into().unwrap();
         let mut h = Hasher::new();
-        h.add_block(a);
-        assert_eq!(h.finish(), a);
-        h.add_block(b);
-        assert_eq!(h.finish(), b);
+        h.add_block(&a);
+        assert_eq!(h.finish_tree(&sha256::Digest::default()), a);
+        h.add_block(&b);
+        assert_eq!(h.finish_tree(&sha256::Digest::default()), b);
     }
 
     #[test]
     fn test_no_blocks() {
         // no blocks returns a zeroed Digest
-        assert_eq!(root_hash([]), sha256::Digest::default());
+        assert_eq!(root_hash(0, []), sha256::Digest::default());
     }
 
     #[test]
     fn test_single_block() {
         // acts as an identity function
         let d = ['a' as u8; sha256::Digest::LENGTH].try_into().unwrap();
-        assert_eq!(root_hash([d]), d);
+        assert_eq!(root_hash(0, [&d]), d);
     }
 
     #[test]
@@ -126,7 +158,7 @@ mod tests {
         let a = ['a' as u8; sha256::Digest::LENGTH].try_into().unwrap();
         let b = ['b' as u8; sha256::Digest::LENGTH].try_into().unwrap();
         assert_eq!(
-            root_hash([a, b]),
+            root_hash(0, [&a, &b]),
             [
                 253, 210, 166, 77, 1, 79, 44, 64, 109, 46, 206, 103, 194, 50, 18, 169, 43, 53, 99,
                 20, 244, 222, 180, 43, 36, 195, 149, 41, 110, 227, 4, 210
@@ -144,7 +176,7 @@ mod tests {
         let d = ['d' as u8; sha256::Digest::LENGTH].try_into().unwrap();
         let e = ['e' as u8; sha256::Digest::LENGTH].try_into().unwrap();
         assert_eq!(
-            root_hash([a, b, c, d, e]),
+            root_hash(0, [&a, &b, &c, &d, &e]),
             [
                 222, 68, 145, 88, 43, 139, 111, 195, 30, 55, 91, 172, 218, 123, 131, 66, 207, 14,
                 90, 238, 92, 245, 212, 7, 254, 132, 100, 221, 80, 132, 186, 238

@@ -34,6 +34,9 @@ pub struct FileV2Hasher {
 
     piece_merkle: merkle::Hasher,
     pieces_layer: Vec<sha256::Digest>,
+
+    // Whether or not we are still reading the first piece.
+    first_piece: bool,
 }
 
 impl FileV2Hasher {
@@ -45,6 +48,7 @@ impl FileV2Hasher {
             block_cur: 0,
             piece_merkle: merkle::Hasher::new(),
             pieces_layer: Vec::new(),
+            first_piece: true,
         }
     }
 
@@ -69,10 +73,12 @@ impl FileV2Hasher {
             let (n, block_digest) = update_block(self, data);
             data = &data[n..];
             if let Some(d) = block_digest {
-                self.piece_merkle.add_block(d);
+                self.piece_merkle.add_block(&d);
                 if let Some(l) = self.piece_merkle.current_layer() {
                     if l == self.piece_length.layers {
-                        self.pieces_layer.push(self.piece_merkle.finish());
+                        self.first_piece = false;
+                        self.pieces_layer
+                            .push(self.piece_merkle.finish_tree(&sha256::Digest::default()));
                     }
                 }
             }
@@ -88,15 +94,21 @@ impl FileV2Hasher {
     pub fn finish(&mut self) -> (metainfo::File, Vec<sha256::Digest>) {
         if self.block_cur > 0 {
             let d = self.finish_block();
-            self.piece_merkle.add_block(d);
+            self.piece_merkle.add_block(&d);
         }
 
         if !self.piece_merkle.is_empty() {
-            let d = self.piece_merkle.finish();
+            let d = match self.first_piece {
+                true => self.piece_merkle.finish_tree(&sha256::Digest::default()),
+                false => self
+                    .piece_merkle
+                    .finish_layer(&sha256::Digest::default(), self.piece_length.layers)
+                    .unwrap(),
+            };
             self.pieces_layer.push(d);
         }
 
-        let root = merkle::root_hash(self.pieces_layer.iter().copied());
+        let root = merkle::root_hash(self.piece_length.layers, &self.pieces_layer);
 
         // A pieces_layer with only one value contains the pieces_root. We can
         // ignore it.
@@ -164,16 +176,16 @@ mod tests {
 
     #[test]
     fn checksum_file_zeros() {
-        let buf = [0; 120 << 10];
+        let input_file = io::repeat(0).take(65 << 10);
         let piece_length = metainfo::PieceLength::from_bytes(32 << 10).unwrap();
-        let (f, pieces_layer) = checksum_file(piece_length, buf.as_ref()).unwrap();
+        let (f, pieces_layer) = checksum_file(piece_length, input_file).unwrap();
         assert_eq!(
             f,
             metainfo::File {
-                length: 120 << 10,
+                length: 65 << 10,
                 pieces_root: [
-                    200, 18, 209, 25, 120, 198, 164, 171, 58, 203, 242, 135, 1, 92, 0, 243, 175,
-                    245, 140, 86, 145, 70, 124, 111, 150, 150, 245, 81, 151, 231, 182, 73
+                    230, 159, 27, 131, 197, 211, 213, 133, 84, 248, 147, 160, 97, 88, 105, 146, 81,
+                    144, 15, 69, 203, 145, 187, 180, 46, 23, 211, 74, 172, 184, 160, 31
                 ]
                 .into()
             }
@@ -193,15 +205,10 @@ mod tests {
                 ]
                 .into(),
                 [
-                    195, 109, 13, 214, 168, 134, 225, 252, 231, 88, 182, 181, 197, 49, 183, 3, 161,
-                    242, 30, 143, 100, 83, 120, 92, 57, 9, 49, 207, 143, 168, 167, 109
+                    118, 213, 104, 91, 215, 13, 55, 194, 193, 92, 75, 88, 26, 143, 165, 141, 178,
+                    34, 112, 190, 188, 193, 9, 178, 238, 100, 156, 170, 146, 39, 134, 82
                 ]
                 .into(),
-                [
-                    194, 166, 105, 204, 134, 68, 171, 139, 37, 16, 113, 141, 63, 249, 27, 178, 69,
-                    219, 16, 61, 251, 2, 103, 128, 162, 223, 72, 98, 78, 76, 129, 248
-                ]
-                .into()
             ]
         );
     }
