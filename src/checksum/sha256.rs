@@ -16,15 +16,15 @@ impl std::convert::AsRef<[u8]> for Digest {
     }
 }
 
-impl std::convert::From<[u8; Digest::LENGTH]> for Digest {
-    fn from(a: [u8; Digest::LENGTH]) -> Self {
-        Self(a)
+impl std::convert::From<Digest> for [u8; Digest::LENGTH] {
+    fn from(d: Digest) -> Self {
+        d.0
     }
 }
 
-impl std::convert::Into<[u8; Digest::LENGTH]> for Digest {
-    fn into(self) -> [u8; Digest::LENGTH] {
-        self.0
+impl std::convert::From<[u8; Digest::LENGTH]> for Digest {
+    fn from(a: [u8; Digest::LENGTH]) -> Self {
+        Self(a)
     }
 }
 

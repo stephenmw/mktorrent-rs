@@ -70,7 +70,7 @@ struct PieceV2Hasher {
 impl PieceV2Hasher {
     fn new(piece_length: PieceLength) -> Self {
         Self {
-            piece_length: piece_length,
+            piece_length,
             block_hasher: sha256::Hasher::default(),
             block_pos: 0,
             merkle: merkle::Hasher::default(),
@@ -98,8 +98,7 @@ impl PieceV2Hasher {
 
     fn finish_first_piece(&mut self) -> sha256::Digest {
         self.finish_block();
-        let ret = self.merkle.finish_tree(&sha256::Digest::default());
-        ret
+        self.merkle.finish_tree(&sha256::Digest::default())
     }
 
     fn reset(&mut self) {

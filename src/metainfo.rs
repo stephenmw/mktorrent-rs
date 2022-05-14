@@ -21,10 +21,10 @@ pub struct Torrent {
 impl Torrent {
     pub fn new(announce: String, name: String, piece_length: PieceLength) -> Self {
         Torrent {
-            announce: announce,
+            announce,
             info: Info {
-                name: name,
-                piece_length: piece_length,
+                name,
+                piece_length,
                 file_tree: Directory::default(),
             },
             piece_layers: HashMap::new(),
@@ -48,7 +48,7 @@ impl Torrent {
 
         for c in components {
             cur_dir = match cur_dir
-                .or_insert(Directory::default().into())
+                .or_insert_with(|| Directory::default().into())
                 .get_entry(c.to_owned())
             {
                 Some(x) => x,
@@ -64,7 +64,7 @@ impl Torrent {
         };
 
         // TODO: check for piece layer already existing.
-        if pieces_layer.len() != 0 {
+        if !pieces_layer.is_empty() {
             self.piece_layers.insert(f.pieces_root, pieces_layer);
         }
 
@@ -223,7 +223,7 @@ impl PieceLength {
     #[allow(dead_code)]
     pub fn from_bytes(n: u64) -> Option<Self> {
         let layers = log2(n).filter(|&n| n >= 14).map(|n| n - 14)?;
-        Some(PieceLength { layers: layers })
+        Some(PieceLength { layers })
     }
 
     pub fn bytes(&self) -> u64 {

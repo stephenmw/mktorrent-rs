@@ -56,7 +56,7 @@ fn main() -> Result<()> {
 
     if metadata.is_file() {
         let filename = &torrent_name;
-        let dir = root.parent().unwrap_or(Path::new(""));
+        let dir = root.parent().unwrap_or_else(|| Path::new(""));
         let pb = build_progress_bar(metadata.len());
 
         add_file(&mut torrent, dir, piece_length, filename, pb.clone())?;
@@ -82,8 +82,7 @@ fn build_progress_bar(l: u64) -> ProgressBar {
     let style = ProgressStyle::default_bar()
         .template("[{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} ({eta})")
         .progress_chars("#>-");
-    let pb = ProgressBar::new(l).with_style(style);
-    pb
+    ProgressBar::new(l).with_style(style)
 }
 
 fn add_file(
@@ -96,11 +95,10 @@ fn add_file(
     let (f, pieces_layer) = {
         let f = fs::File::open(root.join(path)).context("failed to open file")?;
         let mut r = ProgressReader::new(pb, f);
-        let ret = checksum::checksum_file(piece_length, &mut r).context("failed to read file")?;
-        ret
+        checksum::checksum_file(piece_length, &mut r).context("failed to read file")?
     };
 
-    if !torrent.add_file(&path, f, pieces_layer) {
+    if !torrent.add_file(path, f, pieces_layer) {
         return Err(Error::msg("conflicting file"));
     }
 

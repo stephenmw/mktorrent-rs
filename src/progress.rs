@@ -9,7 +9,7 @@ pub struct ProgressReader<T: Read> {
 
 impl<T: Read> ProgressReader<T> {
     pub fn new(pb: ProgressBar, r: T) -> Self {
-        Self { pb: pb, r: r }
+        Self { pb, r }
     }
 }
 
