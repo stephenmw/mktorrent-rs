@@ -58,10 +58,6 @@ impl Hasher {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.stack.is_empty()
-    }
-
     // Adds the pad to the merkle tree until there is a single root. This
     // resets the hasher.
     pub fn finish_tree(&mut self, pad: &sha256::Digest) -> sha256::Digest {
