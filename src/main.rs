@@ -1,6 +1,6 @@
 mod checksum;
+mod ioutil;
 mod metainfo;
-mod progress;
 
 use std::fs;
 use std::io::{self, Write};
@@ -9,9 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Error, Result};
 use bendy::encoding::ToBencode;
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
 use metainfo::{PieceLength, Torrent, MAX_FILE_PATH_DEPTH};
-use progress::ProgressReader;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -57,19 +55,12 @@ fn main() -> Result<()> {
     if metadata.is_file() {
         let filename = &torrent_name;
         let dir = root.parent().unwrap_or_else(|| Path::new(""));
-        let pb = build_progress_bar(metadata.len());
 
-        add_file(&mut torrent, dir, piece_length, filename, pb.clone())?;
-        pb.finish();
+        add_file(&mut torrent, dir, piece_length, filename, metadata.len())?;
     } else {
-        let files = get_file_list(&root)?;
-        let total_length: u64 = files.iter().map(|&(_, n)| n).sum();
-        let pb = build_progress_bar(total_length);
-
-        for (file, _) in files.iter() {
-            add_file(&mut torrent, &root, piece_length, file, pb.clone())?;
+        for (file, l) in get_file_list(&root)? {
+            add_file(&mut torrent, &root, piece_length, &file, l)?;
         }
-        pb.finish();
     }
 
     let encoded = torrent.to_bencode().unwrap();
@@ -78,24 +69,17 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn build_progress_bar(l: u64) -> ProgressBar {
-    let style = ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} ({eta})")
-        .progress_chars("#>-");
-    ProgressBar::new(l).with_style(style)
-}
-
 fn add_file(
     torrent: &mut Torrent,
     root: &Path,
     piece_length: PieceLength,
     path: &str,
-    pb: ProgressBar,
+    file_length: u64,
 ) -> Result<()> {
     let (f, pieces_layer) = {
-        let f = fs::File::open(root.join(path)).context("failed to open file")?;
-        let mut r = ProgressReader::new(pb, f);
-        checksum::checksum_file(piece_length, &mut r).context("failed to read file")?
+        let r = ioutil::ClonableFile::new(root.join(path));
+        checksum::checksum_file_multithreaded(piece_length, file_length, r)
+            .context("failed to checksum file")?
     };
 
     if !torrent.add_file(path, f, pieces_layer) {
