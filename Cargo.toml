@@ -7,11 +7,11 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-bendy = "0.3.3"
-clap = { version = "3.1.15", features = ["derive"] }
+bendy = "0.3"
+clap = { version = "3.1", features = ["derive"] }
 indicatif = "0.16"
 rayon = "1.5"
-ring = "0.16.20"
+ring = "0.16"
 walkdir = "2.3"
 
 [profile.test]
