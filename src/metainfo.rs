@@ -80,16 +80,20 @@ impl ToBencode for Torrent {
             e.emit_pair(b"announce", &self.announce)?;
             e.emit_pair(b"info", &self.info)?;
             e.emit_pair_with(b"piece layers", |e| {
-                e.emit_unsorted_dict(|e| {
-                    for (k, v) in self.piece_layers.iter() {
-                        // TODO: Reduce copies here.
-                        // bendy requires an entire string to be provided as a
-                        // single value. This results in an unneeded copy
-                        // causing a total of 3 copies to be in memory.
+                e.emit_dict(|mut e| {
+                    // Sort layers to emit them in order.
+                    let mut layers: Vec<_> = self.piece_layers.iter().collect();
+                    layers.sort_unstable_by_key(|&(k, _)| k);
+
+                    let max_len = layers.iter().map(|&(_, v)| v.len()).max().unwrap_or(0);
+                    let mut buf = Vec::with_capacity(max_len * sha256::Digest::LENGTH);
+
+                    for (k, v) in layers {
                         if v.is_empty() {
                             continue;
                         }
-                        let mut buf = Vec::with_capacity(v.len() * sha256::Digest::LENGTH);
+
+                        buf.truncate(0);
                         v.iter().for_each(|s| buf.extend_from_slice(s.as_ref()));
                         e.emit_pair(k.as_ref(), AsString(&buf))?;
                     }
@@ -174,8 +178,11 @@ impl ToBencode for Directory {
     const MAX_DEPTH: usize = MAX_FILE_PATH_DEPTH + File::MAX_DEPTH;
 
     fn encode(&self, encoder: SingleItemEncoder) -> Result<(), Error> {
-        encoder.emit_unsorted_dict(|e| {
-            for (k, v) in self.entries.iter() {
+        encoder.emit_dict(|mut e| {
+            let mut entries: Vec<_> = self.entries.iter().collect();
+            entries.sort_unstable_by_key(|&(k, _)| k);
+
+            for (k, v) in entries {
                 e.emit_pair(k.as_bytes(), v)?;
             }
 
