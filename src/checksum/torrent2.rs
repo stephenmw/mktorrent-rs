@@ -1,6 +1,7 @@
 use std::cmp;
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, Read, Write};
 
+use positioned_io::{Cursor, ReadAt, Slice};
 use rayon::prelude::*;
 
 use crate::checksum::{merkle, sha256};
@@ -61,12 +62,12 @@ pub fn checksum_file(
 }
 
 // Produces the metainfo and piece_layer for a file.
-pub fn checksum_file_multithreaded<T: Read + Seek + Clone + Send>(
+pub fn checksum_file_multithreaded<T: ReadAt + Sync>(
     piece_length: PieceLength,
     file_length: u64,
-    r: T,
+    r: &T,
 ) -> io::Result<(metainfo::File, Vec<sha256::Digest>)> {
-    let mut seeker = PiecesSeeker::new(piece_length.bytes(), r);
+    let piece_bytes = piece_length.bytes();
     let num_pieces = {
         file_length / piece_length.bytes()
             + if file_length % piece_length.bytes() > 0 {
@@ -79,7 +80,7 @@ pub fn checksum_file_multithreaded<T: Read + Seek + Clone + Send>(
     // Files with less than 2 pieces have edge cases and would not benefit from
     // multithreading.
     if num_pieces <= 1 {
-        return checksum_file(piece_length, seeker.piece(0)?);
+        return checksum_file(piece_length, piece_reader(r, 0, piece_bytes));
     }
 
     // Number of pieces to process at a time.
@@ -88,8 +89,9 @@ pub fn checksum_file_multithreaded<T: Read + Seek + Clone + Send>(
     let pieces_layer = (0..num_pieces as usize)
         .into_par_iter()
         .with_min_len(batch_size as usize)
-        .map_with(seeker, |seeker, idx| {
-            let mut piece = io::BufReader::with_capacity(1 << 20, seeker.piece(idx as u64)?);
+        .map_with(r, |r, idx| {
+            let mut piece =
+                io::BufReader::with_capacity(1 << 20, piece_reader(r, idx as u64, piece_bytes));
             let mut hasher = PieceV2Hasher::new(piece_length);
 
             let expected_length = {
@@ -205,72 +207,8 @@ impl Write for PieceV2Hasher {
     }
 }
 
-#[derive(Clone)]
-pub struct PiecesSeeker<T: Read + Seek> {
-    piece_length: u64,
-    current_piece: Option<u64>,
-    r: T,
-}
-
-impl<T: Read + Seek> PiecesSeeker<T> {
-    pub fn new(piece_length: u64, r: T) -> Self {
-        Self {
-            piece_length,
-            current_piece: None,
-            r,
-        }
-    }
-
-    // Returns a reader for the nth piece (0-indexed). If the reader is already
-    // at the correct piece, the seek is elided.
-    pub fn piece(&mut self, n: u64) -> io::Result<PieceReader<T>> {
-        if self.current_piece != Some(n) {
-            let pos = n * self.piece_length;
-            self.r.seek(io::SeekFrom::Start(pos))?;
-        }
-
-        self.current_piece = None;
-        let piece_length = self.piece_length;
-
-        Ok(PieceReader {
-            seeker: self,
-            remaining: piece_length,
-            piece: n,
-        })
-    }
-}
-
-pub struct PieceReader<'a, T: Read + Seek> {
-    seeker: &'a mut PiecesSeeker<T>,
-    remaining: u64,
-    piece: u64,
-}
-
-impl<'a, T: Read + Seek> Read for PieceReader<'a, T> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.remaining == 0 {
-            return Ok(0);
-        }
-
-        let max_read = cmp::min(buf.len() as u64, self.remaining) as usize;
-
-        let ret = self.seeker.r.read(&mut buf[..max_read]);
-        if let Ok(n) = ret {
-            self.remaining -= n as u64;
-        }
-
-        ret
-    }
-}
-
-impl<'a, T: Read + Seek> Drop for PieceReader<'a, T> {
-    fn drop(&mut self) {
-        // If this reader has been finished, we have already seeked to the
-        // next piece.
-        if self.remaining == 0 {
-            self.seeker.current_piece = Some(self.piece + 1);
-        }
-    }
+fn piece_reader<I: ReadAt>(io: I, index: u64, piece_length: u64) -> Cursor<Slice<I>> {
+    Cursor::new(Slice::new(io, index * piece_length, Some(piece_length)))
 }
 
 #[cfg(test)]
@@ -295,9 +233,9 @@ mod tests {
     #[test]
     fn checksum_file_zeros() {
         const L: u64 = 65 << 10;
-        let input_file = io::Cursor::new([0; L as usize]);
+        let input_file = [0u8; L as usize].as_slice();
         let piece_length = metainfo::PieceLength::from_bytes(32 << 10).unwrap();
-        let (f, pieces_layer) = checksum_file_multithreaded(piece_length, L, input_file).unwrap();
+        let (f, pieces_layer) = checksum_file_multithreaded(piece_length, L, &input_file).unwrap();
         assert_eq!(
             f,
             metainfo::File {
@@ -334,11 +272,11 @@ mod tests {
 
     #[test]
     fn checksum_file_lessthan_block() {
-        let content = "test".as_bytes();
-        let input_file = io::Cursor::new(content);
+        let input_file = "test".as_bytes();
         let piece_length = metainfo::PieceLength::from_bytes(32 << 10).unwrap();
         let (f, pieces_layer) =
-            checksum_file_multithreaded(piece_length, content.len() as u64, input_file).unwrap();
+            checksum_file_multithreaded(piece_length, input_file.len() as u64, &input_file)
+                .unwrap();
         assert_eq!(
             f,
             metainfo::File {

@@ -1,5 +1,4 @@
 mod checksum;
-mod ioutil;
 mod metainfo;
 
 use std::fs;
@@ -10,6 +9,7 @@ use anyhow::{Context, Error, Result};
 use bendy::encoding::ToBencode;
 use clap::Parser;
 use metainfo::{PieceLength, Torrent, MAX_FILE_PATH_DEPTH};
+use positioned_io::RandomAccessFile;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -76,8 +76,8 @@ fn add_file(
     file_length: u64,
 ) -> Result<()> {
     let (f, pieces_layer) = {
-        let r = ioutil::ClonableFile::new(root.join(path));
-        checksum::checksum_file_multithreaded(piece_length, file_length, r)
+        let r = RandomAccessFile::open(root.join(path))?;
+        checksum::checksum_file_multithreaded(piece_length, file_length, &r)
             .context("failed to checksum file")?
     };
 

@@ -10,6 +10,7 @@ anyhow = "1.0"
 bendy = "0.3"
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
+positioned-io = "0.3"
 rayon = "1"
 ring = "0.17"
 walkdir = "2"
