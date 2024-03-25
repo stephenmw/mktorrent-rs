@@ -25,7 +25,6 @@ struct Cli {
     #[clap(long, value_name = "EXPONENT")]
     piece_length: u8,
 
-    #[clap(parse(from_os_str))]
     root: PathBuf,
 }
 
